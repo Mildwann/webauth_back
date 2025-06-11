@@ -24,7 +24,7 @@ const port = 3000;
 const rpID = "localhost";
 const origin = `http://${rpID}`;
 const rpName = "WebAuthn Tutorial";
-const expectedOrigin = "http://localhost:5500";
+const expectedOrigin = "http://localhost:8100";
 const cors = require("cors");
 
 // Allow CORS from your frontend origin
@@ -50,10 +50,7 @@ app.use(
     }),
   })
 );
-app.get("/", async (req, res) => {
- 
-  res.send("hello");
-});
+
 // --- Register begin ---
 app.post("/register", async (req, res) => {
   const uname = req.body.username;
@@ -78,7 +75,7 @@ app.post("/register", async (req, res) => {
     }
     user = data;
   }
-  
+
   // ดึง passkeys ของ user
   const { data: passKeys = [] } = await supabase
     .from("passkeys")
@@ -160,7 +157,8 @@ app.post("/register/complete", async (req, res) => {
       credentialPublicKey,
       credentialDeviceType,
     } = registrationInfo;
-
+    console.log(rawCredentialID);
+    
 
     const credentialIDBuffer = base64url.toBuffer(rawCredentialID);  // แปลง base64url string เป็น Buffer
     const credentialIDString = base64url.encode(credentialIDBuffer);
