@@ -1,0 +1,9 @@
+version: "2"
+authtoken: 2yflcspzcfdZAdKY94trN0ISnZM_7vtgrzuBRsPx8CcqHWrU
+tunnels:
+  backend:
+    addr: 3000           # port backend server ของคุณ
+    proto: http
+  frontend:
+    addr: 8100           # port frontend (Ionic serve) ของคุณ
+    proto: http

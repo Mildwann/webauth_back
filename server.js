@@ -10,6 +10,7 @@ const {
 } = require("@simplewebauthn/server");
 const { createClient } = require("@supabase/supabase-js");
 const base64url = require('base64url');
+const bcrypt = require('bcrypt'); 
 
 const app = express();
 const MemoryStore = memoryStore(session);
@@ -21,20 +22,25 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- WebAuthn config ---
 const port = 3000;
-const rpID = "localhost";
-const origin = `http://${rpID}`;
+const rpID = "07bc-2403-6200-88a1-1a8c-692e-bfdb-bd83-c648.ngrok-free.app";
+const origin = `https://${rpID}`;
 const rpName = "WebAuthn Tutorial";
-const expectedOrigin = "http://localhost:8100";
+const expectedOrigin = "https://07bc-2403-6200-88a1-1a8c-692e-bfdb-bd83-c648.ngrok-free.app";
 const cors = require("cors");
 
 // Allow CORS from your frontend origin
 app.use(cors({
-  origin: "http://localhost:8100", // frontend origin
+  origin: "https://07bc-2403-6200-88a1-1a8c-692e-bfdb-bd83-c648.ngrok-free.app", // frontend origin
   methods: ["GET", "POST", "OPTIONS"],
   credentials: true, // if you want to allow cookies/sessions to be sent
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
+const path = require('path');
 app.use(express.json());
-app.use(express.static("./public/"));
+app.use(express.static(path.join(__dirname, 'public', 'www')));
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'www', 'index.html'));
+});
 
 app.use(
   session({
@@ -49,7 +55,40 @@ app.use(
       checkPeriod: 86_400_000,
     }),
   })
-);
+);;
+
+app.post("/register-user", async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).send({ error: "Username and password required" });
+  }
+
+  const saltRounds = 10;
+  const password_hash = await bcrypt.hash(password, saltRounds);
+
+  // สร้าง user หรือถ้ามีแล้วให้ return error
+  const { data: existingUser } = await supabase
+    .from("users")
+    .select("*")
+    .eq("username", username)
+    .single();
+
+  if (existingUser) {
+    return res.status(400).send({ error: "User already exists" });
+  }
+
+  const { data, error } = await supabase
+    .from("users")
+    .insert([{ username, password_hash }])
+    .select()
+    .single();
+
+  if (error) {
+    return res.status(500).send({ error: error.message });
+  }
+
+  res.send({ success: true, user: data });
+});
 
 // --- Register begin ---
 app.post("/register", async (req, res) => {
@@ -158,7 +197,7 @@ app.post("/register/complete", async (req, res) => {
       credentialDeviceType,
     } = registrationInfo;
     console.log(rawCredentialID);
-    
+
 
     const credentialIDBuffer = base64url.toBuffer(rawCredentialID);  // แปลง base64url string เป็น Buffer
     const credentialIDString = base64url.encode(credentialIDBuffer);
@@ -171,7 +210,8 @@ app.post("/register/complete", async (req, res) => {
 
     // ตรวจสอบว่า credentialID นี้เคยถูกใช้หรือยัง
     const existingKey = passKeys.find(
-      (key) => Buffer.compare(key.id, credentialID) === 0
+      // (key) => Buffer.compare(key.id, credentialID) === 0
+      (key) => key.id === credentialIDString
     );
 
     // ถ้ายังไม่มี ให้เพิ่มเข้าไป
@@ -197,7 +237,6 @@ app.post("/register/complete", async (req, res) => {
           console.error("Insert error:", error);
           return res.status(500).send({ error: "Failed to save passkey." });
         }
-
       } catch (err) {
 
         console.log("6");
@@ -237,6 +276,7 @@ app.post("/login", async (req, res) => {
       id: key.id,
       transports: key.transports,
     })),
+
   };
 
   const options = await generateAuthenticationOptions(opts);
@@ -311,10 +351,61 @@ app.post("/login/complete", async (req, res) => {
       .from("passkeys")
       .update({ counter: authenticationInfo.newCounter })
       .eq("id", passKey.id);
+
+    // 2. บันทึก login log
+    await supabase.from("login_logs").insert([
+      {
+        user_id: user.id,
+        credential_id: passKey.id,
+        ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
+        user_agent: req.headers["user-agent"],
+      },
+    ]);
   }
 
   req.session.challenge = undefined;
   res.send({ verified });
+});
+
+app.post("/login/password", async (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).send({ error: "Username and password required" });
+  }
+
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("username", username)
+    .single();
+
+  if (!user) {
+    return res.status(400).send({ error: "User not found" });
+  }
+
+  if (!user.password_hash) {
+    return res.status(400).send({ error: "User has no password set" });
+  }
+
+  const match = await bcrypt.compare(password, user.password_hash);
+  if (!match) {
+    return res.status(400).send({ error: "Invalid password" });
+  }
+
+  // บันทึก login log credential_id = null (ล็อกอินด้วย password)
+  await supabase.from("login_logs").insert([
+    {
+      user_id: user.id,
+      credential_id: null,
+      ip_address: req.ip || req.headers["x-forwarded-for"] || req.connection.remoteAddress,
+      user_agent: req.headers["user-agent"],
+    },
+  ]);
+
+  // อาจสร้าง session หรือ JWT ตรงนี้ (ตามระบบคุณ)
+
+  res.send({ success: true, userId: user.id });
 });
 
 app.listen(port, () => {
